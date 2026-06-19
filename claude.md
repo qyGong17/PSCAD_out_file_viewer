@@ -41,3 +41,17 @@ Tkinter's `pack` geometry manager is highly order-dependent. If you modify the l
 
 - **Modern ttk**: Avoid raw `tk.Button`, `tk.Frame`, etc. Always use `ttk.Button`, `ttk.LabelFrame` so that the app automatically adopts the `vista` or `clam` Windows themes.
 - **Y-Label Alignment**: When Matplotlib Y-tick widths jump from single digits to scientific notation, the Y-label is pushed horizontally. We counter this by invoking `self._fig.align_ylabels(self._axes)` after adding/removing traces, which forces all Y-labels to strictly align vertically across all subplots.
+
+## Additional Features Architecture
+
+1. **Math Expressions (`_show_math_dialog`)**
+   - Uses Python's `eval()` in a controlled local scope `{"df": df, "np": np}` to allow users to generate new signals (e.g., `df['Va'] * 2`).
+   
+2. **FFT Analysis (`_show_fft_dialog`)**
+   - The FFT is computed using `np.fft.fft` strictly on the data points within the currently visible X-axis limits (`ax.get_xlim()`), making it dynamic based on the user's zoom level.
+   
+3. **Cursors (`_on_click`)**
+   - Bound to `Ctrl+LClick` and `Ctrl+RClick`. The cursors are drawn using `ax.axvline`. Time difference (`ΔX`) and corresponding frequency are computed and displayed in a dedicated label in the bottom legend panel.
+   
+4. **Session Management (`_save_session`, `_load_session`)**
+   - Subplot configurations, including labels, trace names, colors, and run associations, are serialized to JSON.
