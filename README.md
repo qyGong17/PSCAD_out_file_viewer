@@ -1,5 +1,7 @@
 # PSCAD Waveform Viewer
 
+![PSCAD Waveform Viewer GUI](gui.png)
+
 A Python-based waveform viewer for PSCAD output files (`.out` and `.inf`).
 
 ## Features
@@ -11,6 +13,11 @@ A Python-based waveform viewer for PSCAD output files (`.out` and `.inf`).
 - Add, remove, and label multiple subplots.
 - Aligns Y-axis labels vertically across subplots.
 - Press `y` while hovering over a subplot to autoscale its Y-axis to the currently visible X-axis limits.
+- **Save/Load Session**: Save your subplot configurations and signals to a JSON file to resume work later.
+- **Save CSV**: Export currently plotted signals across multiple runs into a single merged CSV.
+- **Trace Math**: Create new signals using Python expressions (e.g., `df['Va'] * 2`) using `numpy`.
+- **FFT Analysis**: Perform Fast Fourier Transform analysis on a selected signal for the visible time window.
+- **Cursors**: Use `Ctrl + Left Click` and `Ctrl + Right Click` to place vertical cursors to measure time differences ($\Delta X$) and frequency.
 
 ## Requirements
 
