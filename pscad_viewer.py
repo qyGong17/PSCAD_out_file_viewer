@@ -39,8 +39,38 @@ plt.rcParams.update({
     "figure.constrained_layout.use": True,
 })
 
+def _resolve_project(path: str) -> str:
+    """Determine the PSCAD project name for an output folder.
+
+    Output folder names carry a compiler-specific extension (.if15, .if18,
+    .gf42, .gf46, ...), so first try the name before the last '.'. If that
+    doesn't correspond to an actual project (no matching .inf + _NN.out
+    files), fall back to scanning the folder for any *.inf file that has
+    matching *_NN.out files.
+    """
+    folder_name = os.path.basename(path.rstrip("\\/"))
+    candidate = os.path.splitext(folder_name)[0]
+
+    def _has_outputs(project):
+        if not os.path.exists(os.path.join(path, project + ".inf")):
+            return False
+        pattern = re.compile(rf"^{re.escape(project)}_\d+\.out$")
+        return any(pattern.match(f) for f in os.listdir(path))
+
+    if _has_outputs(candidate):
+        return candidate
+
+    for f in sorted(os.listdir(path)):
+        if f.lower().endswith(".inf"):
+            project = f[:-4]
+            if _has_outputs(project):
+                return project
+
+    return candidate
+
+
 def _read_pscad_folder(path: str, project: str) -> pd.DataFrame:
-    """Read a PSCAD .if18 output folder directly into a DataFrame.
+    """Read a PSCAD output folder (.if18, .gf46, etc.) directly into a DataFrame.
 
     Bypasses ImPSCAD.PSCADVar to avoid the write-then-reread CSV round-trip
     and the slow pairwise reduce(merge) it uses.  Falls back to a cached CSV
@@ -133,20 +163,39 @@ class PSCADViewer(tk.Tk):
     def _build_toolbar(self):
         bar = ttk.Frame(self, padding=4)
         bar.pack(side=tk.TOP, fill=tk.X)
-        ttk.Button(bar, text="Open Folder…", command=self._browse_folder, width=14).pack(side=tk.LEFT, padx=6)
-        ttk.Button(bar, text="Save CSV…",    command=self._save_csv,      width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Button(bar, text="Clear All",    command=self._clear_all,     width=10).pack(side=tk.LEFT, padx=2)
-        ttk.Button(bar, text="Save Session", command=self._save_session,  width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Button(bar, text="Load Session", command=self._load_session,  width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Button(bar, text="Math...",      command=self._show_math_dialog, width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Button(bar, text="FFT",          command=self._show_fft_dialog, width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Frame(bar, width=16).pack(side=tk.LEFT)
-        ttk.Label(bar, text="Cursors: Ctrl+LClick/RClick").pack(side=tk.LEFT, padx=6)
-        ttk.Frame(bar, width=16).pack(side=tk.LEFT)
-        ttk.Button(bar, text="Add Subplot",  command=self._add_subplot,   width=12).pack(side=tk.LEFT, padx=2)
-        ttk.Label(bar, text="Active:").pack(side=tk.LEFT, padx=(12, 2))
-        self._sp_menu = ttk.Combobox(bar, textvariable=self._active_sp, state="readonly", width=12)
+
+        row1 = ttk.Frame(bar)
+        row1.pack(side=tk.TOP, fill=tk.X)
+        row2 = ttk.Frame(bar)
+        row2.pack(side=tk.TOP, fill=tk.X, pady=(4, 0))
+
+        ttk.Button(row1, text="Open Folder…", command=self._browse_folder, width=14).pack(side=tk.LEFT, padx=6)
+        ttk.Button(row1, text="Save CSV…",    command=self._save_csv,      width=12).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="Clear All",    command=self._clear_all,     width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="Save Session", command=self._save_session,  width=12).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="Load Session", command=self._load_session,  width=12).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="Math...",      command=self._show_math_dialog, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="FFT",          command=self._show_fft_dialog, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Frame(row1, width=16).pack(side=tk.LEFT)
+        ttk.Button(row1, text="Add Subplot",  command=self._add_subplot,   width=12).pack(side=tk.LEFT, padx=2)
+        ttk.Label(row1, text="Active:").pack(side=tk.LEFT, padx=(12, 2))
+        self._sp_menu = ttk.Combobox(row1, textvariable=self._active_sp, state="readonly", width=12)
         self._sp_menu.set("Subplot 1")
+
+        ttk.Label(row2, text="Cursors: Ctrl+LClick/RClick").pack(side=tk.LEFT, padx=6)
+        ttk.Frame(row2, width=16).pack(side=tk.LEFT)
+        ttk.Label(row2, text="Time range:").pack(side=tk.LEFT, padx=(0, 2))
+        self._tstart_var = tk.StringVar()
+        self._tstop_var = tk.StringVar()
+        start_entry = ttk.Entry(row2, textvariable=self._tstart_var, width=9)
+        start_entry.pack(side=tk.LEFT)
+        ttk.Label(row2, text="–").pack(side=tk.LEFT, padx=2)
+        stop_entry = ttk.Entry(row2, textvariable=self._tstop_var, width=9)
+        stop_entry.pack(side=tk.LEFT)
+        start_entry.bind("<Return>", self._apply_time_range)
+        stop_entry.bind("<Return>", self._apply_time_range)
+        ttk.Button(row2, text="Apply", command=self._apply_time_range, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row2, text="Zoom to Cursors", command=self._zoom_to_cursors, width=14).pack(side=tk.LEFT, padx=2)
         self._sp_menu.pack(side=tk.LEFT, padx=2)
 
     def _build_main_frame(self):
@@ -164,6 +213,16 @@ class PSCADViewer(tk.Tk):
         
         nav = NavigationToolbar2Tk(canvas, plot_frame)
         nav.update()
+        
+        def custom_home(*args, **kwargs):
+            for ax in self._axes:
+                ax.autoscale(enable=True, axis='both', tight=None)
+                ax.relim()
+                ax.autoscale_view()
+            self._canvas.draw_idle()
+            nav.update()
+            
+        nav.home = custom_home
         
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._canvas = canvas
@@ -305,6 +364,7 @@ class PSCADViewer(tk.Tk):
             ax.set_ylabel(ylabel.get() if ylabel else f"SP {i + 1}", fontsize=FS_LABEL)
             ax.tick_params(labelsize=FS_TICK)
             ax.grid(True)
+            ax.callbacks.connect('xlim_changed', self._on_xlim_changed)
             self._axes.append(ax)
             self._subplot_data[i]["ax"] = ax
         if n > 0:
@@ -332,7 +392,7 @@ class PSCADViewer(tk.Tk):
 
     # ── Data loading ──────────────────────────────────────────────────────────
     def _browse_folder(self):
-        path = filedialog.askdirectory(title="Select PSCAD output folder (.if18)")
+        path = filedialog.askdirectory(title="Select PSCAD output folder")
         if path:
             self._load_folder_bg(path)
 
@@ -351,8 +411,7 @@ class PSCADViewer(tk.Tk):
         threading.Thread(target=self._load_folder_thread, args=(path,), daemon=True).start()
 
     def _load_folder_thread(self, path):
-        name = os.path.basename(path)
-        project = name.replace(".if18", "")
+        project = _resolve_project(path)
         try:
             df = _read_pscad_folder(path, project)
             self.after(0, self._on_load_success, df, project)
@@ -444,7 +503,6 @@ class PSCADViewer(tk.Tk):
         if self._axes:
             self._fig.align_ylabels(self._axes)
         self._canvas.draw_idle()
-        self._canvas.toolbar.update()
 
     def _remove_trace(self, sp_idx, trace_id):
         sp = self._subplot_data[sp_idx]
@@ -460,7 +518,6 @@ class PSCADViewer(tk.Tk):
         if self._axes:
             self._fig.align_ylabels(self._axes)
         self._canvas.draw_idle()
-        self._canvas.toolbar.update()
 
     def _add_legend_row(self, sp_idx, col, color):
         sp = self._subplot_data[sp_idx]
@@ -538,13 +595,18 @@ class PSCADViewer(tk.Tk):
         if not path:
             return
             
-        session_data = []
+        subplots = []
         for sp in self._subplot_data:
             sp_info = {"ylabel": sp["ylabel"].get(), "traces": []}
             for trace_id, trace in sp["traces"].items():
                 sp_info["traces"].append({"col": trace["col"], "color": trace["color"], "run_id": trace["run_id"]})
-            session_data.append(sp_info)
-            
+            subplots.append(sp_info)
+
+        session_data = {
+            "xlim": list(self._axes[0].get_xlim()) if self._axes else None,
+            "subplots": subplots,
+        }
+
         try:
             with open(path, "w") as f:
                 json.dump(session_data, f, indent=2)
@@ -565,29 +627,37 @@ class PSCADViewer(tk.Tk):
             
         try:
             with open(path, "r") as f:
-                session_data = json.load(f)
-                
+                raw = json.load(f)
+
+            if isinstance(raw, list):          # old format: bare list of subplots
+                subplots, xlim = raw, None
+            else:
+                subplots, xlim = raw.get("subplots", []), raw.get("xlim")
+
             self._clear_all()
-            self._init_subplots(len(session_data))
-            
-            for i, sp_info in enumerate(session_data):
+            self._init_subplots(len(subplots))
+
+            for i, sp_info in enumerate(subplots):
                 self._subplot_data[i]["ylabel"].set(sp_info.get("ylabel", f"SP {i+1}"))
                 for tr in sp_info.get("traces", []):
                     col = tr.get("col")
                     color = tr.get("color")
                     run_id = tr.get("run_id")
-                    
+
                     if not run_id or run_id not in self._runs or col not in self._runs[run_id].columns:
                         continue
-                        
+
                     try:
                         self._color_idx = self._color_cycle.index(color)
                     except ValueError:
                         pass
-                        
-                    self._add_trace(i, col)
-                    
+
+                    self._add_trace(i, run_id, col)
+
             self._rebuild_axes()
+            if xlim and self._axes:
+                self._axes[0].set_xlim(xlim[0], xlim[1])
+                self._canvas.draw_idle()
         except Exception as exc:
             messagebox.showerror("Load error", str(exc))
 
@@ -688,6 +758,35 @@ class PSCADViewer(tk.Tk):
         nav = NavigationToolbar2Tk(canvas, win)
         nav.update()
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    # ── Time range ───────────────────────────────────────────────────────────
+    def _apply_time_range(self, event=None):
+        try:
+            t0 = float(self._tstart_var.get())
+            t1 = float(self._tstop_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid Range", "Start/Stop must be numeric.")
+            return
+        if t0 == t1 or not self._axes:
+            return
+        if t0 > t1:
+            t0, t1 = t1, t0
+        self._axes[0].set_xlim(t0, t1)
+        self._canvas.draw_idle()
+
+    def _on_xlim_changed(self, ax):
+        xmin, xmax = ax.get_xlim()
+        self._tstart_var.set(f"{xmin:.6f}")
+        self._tstop_var.set(f"{xmax:.6f}")
+
+    def _zoom_to_cursors(self):
+        if self._cursor_a_x is None or self._cursor_b_x is None:
+            messagebox.showwarning("Zoom to Cursors", "Set both cursors first (Ctrl+Click).")
+            return
+        t0, t1 = sorted((self._cursor_a_x, self._cursor_b_x))
+        self._tstart_var.set(f"{t0:.6f}")
+        self._tstop_var.set(f"{t1:.6f}")
+        self._apply_time_range()
 
     def _on_click(self, event):
         if not event.inaxes: return
